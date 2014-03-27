@@ -24,8 +24,9 @@
 #include "qemu-common.h"
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
+#include "qemu/osdep.h"
 
-/*#define I6300ESB_DEBUG 1*/
+#define I6300ESB_DEBUG 1
 
 #ifdef I6300ESB_DEBUG
 #define au6601_debug(fs,...) \
@@ -55,8 +56,7 @@ static void au6601_reset(DeviceState *dev)
 static void au6601_config_write(PCIDevice *dev, uint32_t addr,
                                   uint32_t data, int len)
 {
-    au6601State *d = DO_UPCAST(au6601State, dev, dev);
-    int old;
+    //au6601State *d = DO_UPCAST(au6601State, dev, dev);
 
     au6601_debug("addr = %x, data = %x, len = %d\n", addr, data, len);
 
@@ -65,8 +65,8 @@ static void au6601_config_write(PCIDevice *dev, uint32_t addr,
 
 static uint32_t au6601_config_read(PCIDevice *dev, uint32_t addr, int len)
 {
-    au6601State *d = DO_UPCAST(au6601State, dev, dev);
-    uint32_t data;
+//    au6601State *d = DO_UPCAST(au6601State, dev, dev);
+//    uint32_t data;
 
     au6601_debug ("addr = %x, len = %d\n", addr, len);
 
@@ -84,7 +84,7 @@ static uint32_t au6601_mem_readb(void *vp, hwaddr addr)
 static uint32_t au6601_mem_readw(void *vp, hwaddr addr)
 {
     uint32_t data = 0;
-    au6601State *d = vp;
+  //  au6601State *d = vp;
 
     au6601_debug("addr = %x\n", (int) addr);
 
@@ -100,21 +100,21 @@ static uint32_t au6601_mem_readl(void *vp, hwaddr addr)
 
 static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
 {
-    au6601State *d = vp;
+//    au6601State *d = vp;
 
     au6601_debug("addr = %x, val = %x\n", (int) addr, val);
 }
 
 static void au6601_mem_writew(void *vp, hwaddr addr, uint32_t val)
 {
-    au6601State *d = vp;
+//    au6601State *d = vp;
 
     au6601_debug("addr = %x, val = %x\n", (int) addr, val);
 }
 
 static void au6601_mem_writel(void *vp, hwaddr addr, uint32_t val)
 {
-    au6601State *d = vp;
+//    au6601State *d = vp;
 
     au6601_debug ("addr = %x, val = %x\n", (int) addr, val);
 }
@@ -142,7 +142,7 @@ static int au6601_init(PCIDevice *dev)
     au6601_debug("au6601State = %p\n", d);
 
     memory_region_init_io(&d->io_mem, OBJECT(d), &au6601_ops, d,
-                          "au6601", 0xff);
+                          "au6601", 0x100);
     pci_register_bar(&d->dev, 0, 0, &d->io_mem);
     /* qemu_register_coalesced_mmio (addr, 0x10); ? */
 
