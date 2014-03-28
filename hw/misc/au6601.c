@@ -25,12 +25,21 @@
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "qemu/osdep.h"
+#include <time.h>
 
 #define I6300ESB_DEBUG 1
 
+static FILE *debugfp = NULL;
+
 #ifdef I6300ESB_DEBUG
-#define au6601_debug(fs,...) \
-    fprintf(stderr,"au6601: %s: "fs,__func__,##__VA_ARGS__)
+#define au6601_debug(fmt,...) \
+	do {			\
+		if (!debugfp)	\
+			debugfp = fopen("/var/log/qemu_hw_pci.log", "a+");	\
+		if (debugfp)	\
+    			fprintf(debugfp, "%ld %s: " fmt, (long)time(NULL),	\
+				__func__ , __VA_ARGS__);			\
+	} while (0)
 #else
 #define au6601_debug(fs,...)
 #endif
@@ -167,7 +176,9 @@ static void au6601_class_init(ObjectClass *klass, void *data)
     k->exit = au6601_exit;
     k->vendor_id = 0x1aea;
     k->device_id = 0x6601;
-    k->class_id = PCI_CLASS_SYSTEM_OTHER;
+    k->subsystem_vendor_id = 0x0001;
+    k->subsystem_id = 0x0001;
+    k->class_id = PCI_CLASS_OTHERS;
     dc->reset = au6601_reset;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
