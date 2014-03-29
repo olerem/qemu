@@ -35,7 +35,7 @@ static FILE *debugfp = NULL;
 #define au6601_debug(fmt,...) \
 	do {			\
 		if (!debugfp)	\
-			debugfp = fopen("/var/log/qemu_hw_pci.log", "a+");	\
+			debugfp = fopen("/tmp/qemu_hw_pci.log", "a+");	\
 		if (debugfp)	\
     			fprintf(debugfp, "%ld %s: " fmt, (long)time(NULL),	\
 				__func__ , __VA_ARGS__);			\
@@ -144,16 +144,38 @@ static const MemoryRegionOps au6601_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+#define AU6601_PM_OFFSET 0x80
+#define AU6601_MSI_OFFSET 0x88
+#define AU6601_PCIE_OFFSET 0x98
+
 static int au6601_init(PCIDevice *dev)
 {
     au6601State *d = DO_UPCAST(au6601State, dev, dev);
+    uint8_t *pci_conf;
 
     au6601_debug("au6601State = %p\n", d);
 
+    pci_conf = dev->config;
+    pci_conf[PCI_INTERRUPT_PIN] = 1;    /* interrupt pin A */
+    pci_add_capability(dev, PCI_CAP_ID_PM, AU6601_PM_OFFSET, PCI_PM_SIZEOF);
+    pci_set_word(pci_conf + AU6601_PM_OFFSET + 2, 0x0003);
+
+    pci_add_capability(dev, PCI_CAP_ID_MSI, AU6601_MSI_OFFSET, 16);
+    pci_set_word(pci_conf + AU6601_MSI_OFFSET + 2, 0x0080);
+   // assert(ret >= 0);
+    /* FIXME 0x3c is size of PCI_EXP_VER2_SIZEOF, is it same for VER1? */
+    pci_add_capability(dev, PCI_CAP_ID_EXP, AU6601_PCIE_OFFSET, 0x3c);
+    pci_set_word(pci_conf + AU6601_PCIE_OFFSET + 2, 0x0001);
+    pci_set_long(pci_conf + AU6601_PCIE_OFFSET + 4, 0x05908fc0);
+    pci_set_long(pci_conf + 0xa0 + 0, 0x00002800);
+    pci_set_long(pci_conf + 0xa0 + 4, 0x0103ec11);
+    pci_set_long(pci_conf + 0xa0 + 8, 0x10110040);
+
     memory_region_init_io(&d->io_mem, OBJECT(d), &au6601_ops, d,
-                          "au6601", 0x100);
+                          "au6601-io", 0x100);
     pci_register_bar(&d->dev, 0, 0, &d->io_mem);
     /* qemu_register_coalesced_mmio (addr, 0x10); ? */
+
 
     return 0;
 }
