@@ -49,6 +49,10 @@ struct au6601State {
     PCIDevice dev;
     MemoryRegion io_mem;
 
+    unsigned int card_is_on;
+
+    uint8_t reg_76;
+    uint8_t reg_7f;
 };
 
 typedef struct au6601State au6601State;
@@ -85,9 +89,34 @@ static uint32_t au6601_config_read(PCIDevice *dev, uint32_t addr, int len)
 
 static uint32_t au6601_mem_readb(void *vp, hwaddr addr)
 {
-    au6601_debug ("addr = %x\n", (int) addr);
+    au6601State *d = vp;
+    uint8_t val;
 
-    return 0;
+    switch (addr) {
+    case 0x70:
+    case 0x7a:
+      val = 0xff;
+      break;
+    case 0x76:
+      val = d->reg_76;
+      if (d->card_is_on)
+        val |= 0x1;
+      break;
+    case 0x77:
+      val = 0x70;
+      break;
+    case 0x7f:
+      val = d->reg_7f;
+      break;
+    case 0x86:
+      val = 0xff;
+      break;
+    default:
+      val = 0;
+    }
+
+    au6601_debug ("addr = %x, val = %x\n", (int) addr, val);
+    return val;
 }
 
 static uint32_t au6601_mem_readw(void *vp, hwaddr addr)
@@ -109,9 +138,23 @@ static uint32_t au6601_mem_readl(void *vp, hwaddr addr)
 
 static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
 {
-//    au6601State *d = vp;
+    au6601State *d = vp;
 
     au6601_debug("addr = %x, val = %x\n", (int) addr, val);
+    switch (addr) {
+    case 0x76:
+      d->reg_76 = val;
+      break;
+    case 0x7f:
+      if(val == 0)
+        d->reg_7f = 0x66;
+      else if (val == 1)
+        d->reg_7f = 0x0a;
+      break;
+    default:
+      break;
+    }
+
 }
 
 static void au6601_mem_writew(void *vp, hwaddr addr, uint32_t val)
@@ -144,6 +187,11 @@ static const MemoryRegionOps au6601_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static void au6601_init_priv(au6601State *priv)
+{
+	priv->card_is_on = 1;
+}
+
 #define AU6601_PM_OFFSET 0x80
 #define AU6601_MSI_OFFSET 0x88
 #define AU6601_PCIE_OFFSET 0x98
@@ -174,6 +222,9 @@ static int au6601_init(PCIDevice *dev)
     memory_region_init_io(&d->io_mem, OBJECT(d), &au6601_ops, d,
                           "au6601-io", 0x100);
     pci_register_bar(&d->dev, 0, 0, &d->io_mem);
+
+    au6601_init_priv(d);
+    pci_irq_deassert(dev);
     /* qemu_register_coalesced_mmio (addr, 0x10); ? */
 
 
