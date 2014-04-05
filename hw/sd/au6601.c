@@ -50,9 +50,12 @@ struct au6601State {
     MemoryRegion io_mem;
 
     unsigned int card_is_on;
+    int trig;
+    uint32_t reg_30;
 
     uint8_t reg_76;
     uint8_t reg_7f;
+    uint32_t reg_90;
 };
 
 typedef struct au6601State au6601State;
@@ -87,6 +90,13 @@ static uint32_t au6601_config_read(PCIDevice *dev, uint32_t addr, int len)
 
 }
 
+#if 0
+static void au6601_process_sd(au6601State *priv)
+{
+	
+}
+#endif
+
 static uint32_t au6601_mem_readb(void *vp, hwaddr addr)
 {
     au6601State *d = vp;
@@ -111,6 +121,9 @@ static uint32_t au6601_mem_readb(void *vp, hwaddr addr)
     case 0x86:
       val = 0xff;
       break;
+    case 0x90:
+      val = d->reg_90;
+      break;
     default:
       val = 0;
     }
@@ -131,9 +144,22 @@ static uint32_t au6601_mem_readw(void *vp, hwaddr addr)
 
 static uint32_t au6601_mem_readl(void *vp, hwaddr addr)
 {
-    au6601_debug("addr = %x\n", (int) addr);
+    au6601State *d = vp;
+    uint32_t val;
 
-    return 0;
+    switch (addr) {
+    case 0x30:
+      val = d->reg_30;
+      break;
+    case 0x90:
+      val = d->reg_90;
+      break;
+    default:
+      val = 0;
+    }
+
+    au6601_debug("addr = %x, val = %x\n", (int) addr, val);
+    return val;
 }
 
 static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
@@ -142,6 +168,25 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
 
     au6601_debug("addr = %x, val = %x\n", (int) addr, val);
     switch (addr) {
+    case 0x23:
+      //val &= 0x1F;
+      d->reg_90 = 0x1;
+      if (val == 0x48)
+        d->reg_30 = 0xaa010000;
+      else if (val == 0x77) {
+	if (d->trig == 1) {
+	  d->reg_90 = 0x18000;
+	  d->trig = 0;
+	}
+        d->reg_30 = 0x20010000;
+      } else if (val == 0x69) {
+	d->trig = 1;
+        d->reg_30 = 0x0080ff00;
+      } else if (val == 0x41) {
+	 d->reg_90 = 0x18000;
+      }
+
+      break;
     case 0x76:
       d->reg_76 = val;
       break;
@@ -150,6 +195,12 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
         d->reg_7f = 0x66;
       else if (val == 1)
         d->reg_7f = 0x0a;
+      break;
+    case 0x81:
+      pci_irq_pulse(&d->dev);
+      break;
+    case 0x90:
+      d->reg_90 = 0;
       break;
     default:
       break;
@@ -166,9 +217,16 @@ static void au6601_mem_writew(void *vp, hwaddr addr, uint32_t val)
 
 static void au6601_mem_writel(void *vp, hwaddr addr, uint32_t val)
 {
-//    au6601State *d = vp;
-
     au6601_debug ("addr = %x, val = %x\n", (int) addr, val);
+    au6601State *d = vp;
+
+    switch (addr) {
+    case 0x90:
+      d->reg_90 = 0;
+      break;
+    default:
+      break;
+    }
 }
 
 static const MemoryRegionOps au6601_ops = {
