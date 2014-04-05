@@ -26,6 +26,8 @@
 #include "hw/pci/pci.h"
 #include "qemu/osdep.h"
 #include <time.h>
+#include "sysemu/blockdev.h"
+#include "hw/sd.h"
 
 #define I6300ESB_DEBUG 1
 
@@ -47,7 +49,13 @@ static FILE *debugfp = NULL;
 /* Device state. */
 struct au6601State {
     PCIDevice dev;
+    SDState *card;
     MemoryRegion io_mem;
+
+    uint8_t  cmd;
+    uint32_t cmdarg;
+
+    uint32_t response[4];
 
     unsigned int card_is_on;
     int trig;
@@ -59,6 +67,44 @@ struct au6601State {
 };
 
 typedef struct au6601State au6601State;
+
+static void au6601_send_command(au6601State *d)
+{
+    SDRequest request;
+    uint8_t response[16];
+    int rlen;
+
+    request.cmd = d->cmd & 0x3f;
+    request.arg = d->cmdarg;
+
+    rlen = sd_do_command(d->card, &request, response);
+    if (rlen < 0) {
+      //  au6601_debug("SD: Timeout\n");
+        d->reg_90 = 0x18000;
+        return;
+    }
+    if (1) {
+#define RWORD(n) (((uint32_t)response[n] << 24) | (response[n + 1] << 16) \
+                  | (response[n + 2] << 8) | response[n + 3])
+#if 0
+        if (rlen == 0 || (rlen == 4 && (s->cmd & PL181_CMD_LONGRESP)))
+            goto error;
+        if (rlen != 4 && rlen != 16)
+            goto error;
+#endif
+        d->response[0] = RWORD(0);
+        if (rlen == 4) {
+            d->response[1] = d->response[2] = d->response[3] = 0;
+        } else {
+            d->response[1] = RWORD(4);
+            d->response[2] = RWORD(8);
+            d->response[3] = RWORD(12) & ~1;
+        }
+      //  au6601_debug("SD: Response received\n");
+        d->reg_90 = 0x1;
+#undef RWORD
+    }
+}
 
 static void au6601_reset(DeviceState *dev)
 {
@@ -149,7 +195,16 @@ static uint32_t au6601_mem_readl(void *vp, hwaddr addr)
 
     switch (addr) {
     case 0x30:
-      val = d->reg_30;
+      val = d->response[0];
+      break;
+    case 0x34:
+      val = d->response[1];
+      break;
+    case 0x38:
+      val = d->response[2];
+      break;
+    case 0x3C:
+      val = d->response[3];
       break;
     case 0x90:
       val = d->reg_90;
@@ -168,8 +223,10 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
 
     au6601_debug("addr = %x, val = %x\n", (int) addr, val);
     switch (addr) {
-    case 0x23:
+    case 0x23: /* Command */
+      d->cmd = val;
       //val &= 0x1F;
+#if 0
       d->reg_90 = 0x1;
       if (val == 0x48)
         d->reg_30 = 0xaa010000;
@@ -185,7 +242,7 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
       } else if (val == 0x41) {
 	 d->reg_90 = 0x18000;
       }
-
+#endif
       break;
     case 0x76:
       d->reg_76 = val;
@@ -197,6 +254,8 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
         d->reg_7f = 0x0a;
       break;
     case 0x81:
+      /* FIXME: set command options */
+      au6601_send_command(d);
       pci_irq_pulse(&d->dev);
       break;
     case 0x90:
@@ -221,6 +280,9 @@ static void au6601_mem_writel(void *vp, hwaddr addr, uint32_t val)
     au6601State *d = vp;
 
     switch (addr) {
+    case 0x24:
+      d->cmdarg = val;
+      break;
     case 0x90:
       d->reg_90 = 0;
       break;
@@ -257,6 +319,7 @@ static void au6601_init_priv(au6601State *priv)
 static int au6601_init(PCIDevice *dev)
 {
     au6601State *d = DO_UPCAST(au6601State, dev, dev);
+    DriveInfo *dinfo;
     uint8_t *pci_conf;
 
     au6601_debug("au6601State = %p\n", d);
@@ -285,6 +348,11 @@ static int au6601_init(PCIDevice *dev)
     pci_irq_deassert(dev);
     /* qemu_register_coalesced_mmio (addr, 0x10); ? */
 
+    dinfo = drive_get_next(IF_SD);
+    d->card = sd_init(dinfo ? dinfo->bdrv : NULL, false);
+    if (d->card == NULL) {
+        return -1;
+    }
 
     return 0;
 }
