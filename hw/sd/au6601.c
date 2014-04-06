@@ -25,6 +25,7 @@
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "qemu/osdep.h"
+#include "qemu/timer.h"
 #include <time.h>
 #include "sysemu/blockdev.h"
 #include "hw/sd.h"
@@ -46,6 +47,14 @@ static FILE *debugfp = NULL;
 #define au6601_debug(fs,...)
 #endif
 
+#define AU6601_RSP_CTRL_MASK 0xC0
+#define AU6601_RSP_CTRL_R1   0x40
+#define AU6601_RSP_CTRL_R2   0xC0
+#define AU6601_RSP_CTRL_R3   0x80
+
+#define AU6601_FIFO_LEN 16
+#define AU6601_FIFO_FLAG_READ_START 0x01
+
 /* Device state. */
 struct au6601State {
     PCIDevice dev;
@@ -63,44 +72,197 @@ struct au6601State {
 
     uint8_t reg_76;
     uint8_t reg_7f;
+    uint8_t reg_81;
+    uint8_t reg_83;
     uint32_t reg_90;
+
+    uint32_t datacnt;
+    uint32_t fifocnt;
+    int32_t fifo_pos;
+    int32_t fifo_len;
+    uint32_t fifo[AU6601_FIFO_LEN];
+    unsigned int fifo_flags;
+
+    QEMUTimer *irq_timer;
+    int irq_timer_enabled;
 };
 
 typedef struct au6601State au6601State;
 
+static void au6601_irq_pulse(au6601State *d)
+{
+    if(d->reg_90) {
+        au6601_debug("trigger irq (%x)\n", d->reg_90);
+        pci_irq_pulse(&d->dev);
+    }
+}
+
+static void au6601_irq_timer_expired(void *vp)
+{
+    au6601State *d = vp;
+    au6601_irq_pulse(d);
+    d->irq_timer_enabled = 0;
+}
+
+static void au6601_irq_delay(au6601State *d)
+{
+    if (d->irq_timer_enabled == 1)
+        return;
+    timer_mod(d->irq_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1);
+}
+
+static void au6601_fifo_push(au6601State *d, uint32_t value)
+{
+    int n;
+
+    if (d->fifo_len == AU6601_FIFO_LEN) {
+      //  au6601_debug("FIFO overflow\n");
+        return;
+    }
+    n = (d->fifo_pos + d->fifo_len) & (AU6601_FIFO_LEN - 1);
+    d->fifo_len++;
+    d->fifo[n] = value;
+ //   au6601_debug("FIFO push %08x\n", (int)value);
+}
+
+static uint32_t au6601_fifo_pop(au6601State *d)
+{
+    uint32_t value;
+
+    if (d->fifo_len == 0) {
+       // au6601_debug("FIFO underflow\n");
+        return 0;
+    }
+    value = d->fifo[d->fifo_pos];
+    d->fifo_len--;
+    d->fifo_pos = (d->fifo_pos + 1) & (AU6601_FIFO_LEN - 1);
+    //au6601_debug("FIFO pop %08x\n", (int)value);
+    return value;
+}
+
+static void au6601_fifo_run(au6601State *d)
+{
+   // uint32_t bits;
+    uint32_t value = 0;
+    int n;
+    int is_read;
+
+    //is_read = (d->datactrl & PL181_DATA_DIRECTION) != 0;
+    is_read = d->reg_83 & 0x1;
+    au6601_debug("read %d\n", is_read);
+    if (d->datacnt != 0 && (!is_read || sd_data_ready(d->card))) {
+        if (is_read) {
+            au6601_debug("is_read %p\n", d);
+            d->reg_90 |= 0x20;
+            d->fifo_flags |= AU6601_FIFO_FLAG_READ_START;
+            d->reg_83 &= ~0x1;
+            n = 0;
+            while (d->datacnt && d->fifo_len < AU6601_FIFO_LEN) {
+                value |= (uint32_t)sd_read_data(d->card) << (n * 8);
+                d->datacnt--;
+                n++;
+                if (n == 4) {
+                    au6601_fifo_push(d, value);
+                    n = 0;
+                    value = 0;
+                }
+            }
+            if (n != 0) {
+                au6601_fifo_push(d, value);
+            }
+        } else { /* write */
+            au6601_debug("is_write %p\n", d);
+            n = 0;
+            while (d->datacnt > 0 && (d->fifo_len > 0 || n > 0)) {
+                if (n == 0) {
+                    value = au6601_fifo_pop(d);
+                    n = 4;
+                }
+                n--;
+                d->datacnt--;
+                sd_write_data(d->card, value & 0xff);
+                value >>= 8;
+            }
+        }
+    }
+//    if (d->datacnt == 0) {
+
+#if 0
+    d->status &= ~(PL181_STATUS_RX_FIFO | PL181_STATUS_TX_FIFO);
+    if (d->datacnt == 0) {
+        d->status |= PL181_STATUS_DATAEND;
+        /* HACK: */
+        d->status |= PL181_STATUS_DATABLOCKEND;
+        DPRINTF("Transfer Complete\n");
+    }
+    if (d->datacnt == 0 && d->fifo_len == 0) {
+        d->datactrl &= ~PL181_DATA_ENABLE;
+        DPRINTF("Data engine idle\n");
+    } else {
+        /* Update FIFO bits.  */
+        bits = PL181_STATUS_TXACTIVE | PL181_STATUS_RXACTIVE;
+        if (d->fifo_len == 0) {
+            bits |= PL181_STATUS_TXFIFOEMPTY;
+            bits |= PL181_STATUS_RXFIFOEMPTY;
+        } else {
+            bits |= PL181_STATUS_TXDATAAVLBL;
+            bits |= PL181_STATUS_RXDATAAVLBL;
+        }
+        if (d->fifo_len == 16) {
+            bits |= PL181_STATUS_TXFIFOFULL;
+            bits |= PL181_STATUS_RXFIFOFULL;
+        }
+        if (d->fifo_len <= 8) {
+            bits |= PL181_STATUS_TXFIFOHALFEMPTY;
+        }
+        if (d->fifo_len >= 8) {
+            bits |= PL181_STATUS_RXFIFOHALFFULL;
+        }
+        if (d->datactrl & PL181_DATA_DIRECTION) {
+            bits &= PL181_STATUS_RX_FIFO;
+        } else {
+            bits &= PL181_STATUS_TX_FIFO;
+        }
+        d->status |= bits;
+    }
+#endif
+}
+
 static void au6601_send_command(au6601State *d)
 {
     SDRequest request;
-    uint8_t response[16];
+    uint32_t response[4];
     int rlen;
 
     request.cmd = d->cmd & 0x3f;
-    request.arg = d->cmdarg;
+    request.arg = cpu_to_be32(d->cmdarg);
 
-    rlen = sd_do_command(d->card, &request, response);
+    rlen = sd_do_command(d->card, &request, (uint8_t *)response);
     if (rlen < 0) {
       //  au6601_debug("SD: Timeout\n");
         d->reg_90 = 0x18000;
         return;
     }
+
     if (1) {
-#define RWORD(n) (((uint32_t)response[n] << 24) | (response[n + 1] << 16) \
-                  | (response[n + 2] << 8) | response[n + 3])
+        au6601_debug("sd res len = %d; %x\n", rlen, d->reg_81);
+        if (rlen == 0 && d->reg_81 & AU6601_RSP_CTRL_MASK) {
+            d->reg_90 = 0x18000;
+            return;
+	}
 #if 0
-        if (rlen == 0 || (rlen == 4 && (s->cmd & PL181_CMD_LONGRESP)))
-            goto error;
         if (rlen != 4 && rlen != 16)
             goto error;
 #endif
-        d->response[0] = RWORD(0);
+
+        d->response[0] = cpu_to_le32(response[0]);
         if (rlen == 4) {
             d->response[1] = d->response[2] = d->response[3] = 0;
         } else {
-            d->response[1] = RWORD(4);
-            d->response[2] = RWORD(8);
-            d->response[3] = RWORD(12) & ~1;
+            d->response[1] = cpu_to_le32(response[1]);
+            d->response[2] = cpu_to_le32(response[2]);
+            d->response[3] = cpu_to_le32(response[3]);
         }
-      //  au6601_debug("SD: Response received\n");
         d->reg_90 = 0x1;
 #undef RWORD
     }
@@ -194,6 +356,15 @@ static uint32_t au6601_mem_readl(void *vp, hwaddr addr)
     uint32_t val;
 
     switch (addr) {
+    case 0x8:
+      val = au6601_fifo_pop(d);
+      au6601_fifo_run(d);
+      d->fifocnt -= 4;
+      au6601_debug("fifocnt = %d\n", (int) d->fifocnt);
+      if (d->fifocnt == 0)
+          d->reg_90 = 0x2;
+      au6601_irq_delay(d);
+      break;
     case 0x30:
       val = d->response[0];
       break;
@@ -225,7 +396,6 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
     switch (addr) {
     case 0x23: /* Command */
       d->cmd = val;
-      //val &= 0x1F;
 #if 0
       d->reg_90 = 0x1;
       if (val == 0x48)
@@ -254,9 +424,14 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
         d->reg_7f = 0x0a;
       break;
     case 0x81:
+      d->reg_81 = val;
       /* FIXME: set command options */
       au6601_send_command(d);
-      pci_irq_pulse(&d->dev);
+      au6601_fifo_run(d);
+      au6601_irq_pulse(d);
+      break;
+    case 0x83:
+      d->reg_83 = val;
       break;
     case 0x90:
       d->reg_90 = 0;
@@ -282,6 +457,9 @@ static void au6601_mem_writel(void *vp, hwaddr addr, uint32_t val)
     switch (addr) {
     case 0x24:
       d->cmdarg = val;
+      break;
+    case 0x6c: /* FIFO datacount */
+      d->datacnt = d->fifocnt = val;
       break;
     case 0x90:
       d->reg_90 = 0;
@@ -353,6 +531,8 @@ static int au6601_init(PCIDevice *dev)
     if (d->card == NULL) {
         return -1;
     }
+
+    d->irq_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, au6601_irq_timer_expired, d);
 
     return 0;
 }
