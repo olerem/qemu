@@ -52,7 +52,7 @@ static FILE *debugfp = NULL;
 #define AU6601_RSP_CTRL_R2   0xC0
 #define AU6601_RSP_CTRL_R3   0x80
 
-#define AU6601_FIFO_LEN 16
+#define AU6601_FIFO_LEN 0x200
 #define AU6601_FIFO_FLAG_READ_START 0x01
 
 /* Device state. */
@@ -130,7 +130,7 @@ static uint32_t au6601_fifo_pop(au6601State *d)
     uint32_t value;
 
     if (d->fifo_len == 0) {
-       // au6601_debug("FIFO underflow\n");
+        au6601_debug("FIFO underflow \n");
         return 0;
     }
     value = d->fifo[d->fifo_pos];
@@ -170,7 +170,7 @@ static void au6601_fifo_run(au6601State *d)
             if (n != 0) {
                 au6601_fifo_push(d, value);
             }
-        } else { /* write */
+        } else if (0) { /* write */
             au6601_debug("is_write %p\n", d);
             n = 0;
             while (d->datacnt > 0 && (d->fifo_len > 0 || n > 0)) {
@@ -432,6 +432,10 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
       break;
     case 0x83:
       d->reg_83 = val;
+      if (val & 0x40) {
+          au6601_fifo_run(d);
+          au6601_irq_pulse(d);
+      }
       break;
     case 0x90:
       d->reg_90 = 0;
