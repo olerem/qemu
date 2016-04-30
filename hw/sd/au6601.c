@@ -1,5 +1,5 @@
 /*
- * Virtual hardware SD/MMC host cotroller au6601
+ * Virtual hardware SD/MMC host cotroller for Alcor Micro au6601
  *
  * Copyright (C) 2014 Oleksij Rempel <linux@rempel-privat.de>
  *
@@ -7,11 +7,6 @@
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <inttypes.h>
@@ -25,19 +20,18 @@
 #include "sysemu/blockdev.h"
 #include "hw/sd.h"
 
-#define I6300ESB_DEBUG 1
-
 static FILE *debugfp = NULL;
 
-//#ifdef I6300ESB_DEBUG
-#if 1
-#define au6601_debug(fmt,...) \
-	do {			\
-		if (!debugfp)	\
-			debugfp = fopen("/tmp/qemu_hw_pci.log", "a+");	\
-		if (debugfp)	\
-    			fprintf(debugfp, "%ld %s: " fmt, (long)time(NULL),	\
-				__func__ , __VA_ARGS__);			\
+#define AU6601_ENABLE_DEBUG 1
+
+#ifdef AU6601_ENABLE_DEBUG
+#define au6601_debug(fmt,...)						   \
+	do {								   \
+		if (!debugfp)						   \
+			debugfp = fopen("/tmp/qemu_hw_pci.log", "a+");	   \
+		if (debugfp)						   \
+			fprintf(debugfp, "%ld %s: " fmt, (long)time(NULL), \
+				__func__ , __VA_ARGS__);		   \
 	} while (0)
 #else
 #define au6601_debug(fs,...)
@@ -255,13 +249,13 @@ static void au6601_fifo_push(au6601State *d, uint32_t value)
     int n;
 
     if (d->fifo_len == AU6601_FIFO_LEN) {
-      //  au6601_debug("FIFO overflow\n");
+        au6601_debug("FIFO overflowi %08x\n", (int)value);
         return;
     }
     n = (d->fifo_pos + d->fifo_len) & (AU6601_FIFO_LEN - 1);
     d->fifo_len++;
     d->fifo[n] = value;
- //   au6601_debug("FIFO push %08x\n", (int)value);
+    au6601_debug("FIFO push %08x\n", (int)value);
 }
 
 static uint32_t au6601_fifo_pop(au6601State *d)
@@ -275,18 +269,16 @@ static uint32_t au6601_fifo_pop(au6601State *d)
     value = d->fifo[d->fifo_pos];
     d->fifo_len--;
     d->fifo_pos = (d->fifo_pos + 1) & (AU6601_FIFO_LEN - 1);
-    //au6601_debug("FIFO pop %08x\n", (int)value);
+    au6601_debug("FIFO pop %08x\n", (int)value);
     return value;
 }
 
 static void au6601_fifo_run(au6601State *d)
 {
-   // uint32_t bits;
     uint32_t value = 0;
     int n;
     int is_read;
 
-    //is_read = (d->datactrl & PL181_DATA_DIRECTION) != 0;
     is_read = d->reg_83 & 0x1;
     au6601_debug("read %d\n", is_read);
     if (d->datacnt != 0 && (!is_read || sd_data_ready(d->card))) {
@@ -394,13 +386,6 @@ static uint32_t au6601_config_read(PCIDevice *dev, uint32_t addr, int len)
 
 }
 
-#if 0
-static void au6601_process_sd(au6601State *priv)
-{
-	
-}
-#endif
-
 static uint32_t au6601_mem_readb(void *vp, hwaddr addr)
 {
     au6601State *d = vp;
@@ -499,7 +484,7 @@ static void au6601_mem_writeb(void *vp, hwaddr addr, uint32_t val)
     switch (addr) {
     case AU6601_REG_CMD_OPCODE: /* Command */
       d->cmd = val;
-#if 0
+#if 1
       d->reg_90 = 0x1;
       if (val == 0x48)
         d->reg_30 = 0xaa010000;
